@@ -1,3 +1,8 @@
+:root {
+  --tab-width: 200px;
+  --tab-width-compact: 36px;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -42,13 +47,23 @@ body {
   position: relative;
 }
 
+/* 탭 + 새 탭 버튼을 붙여서 배치 */
+.tab-left {
+  display: flex;
+  align-items: flex-end;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: calc(100% - 340px);
+  gap: 2px;
+}
+
 /* 탭들이 배치되는 컨테이너 */
 .tabs {
   display: flex;
   align-items: flex-end;
   height: 34px;
-  flex: 1 1 auto;
-  min-width: 100px;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow-x: auto;
   position: relative;
   scrollbar-width: none;
@@ -58,14 +73,14 @@ body {
   display: none;
 }
 
-/* 낱개 탭 스타일링 (순정 크롬 곡률 및 비율 반영) */
+/* 낱개 탭 — 기본: 동일 너비 */
 .tab {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: auto;
-  max-width: 220px;
-  min-width: 120px;
+  width: var(--tab-width);
+  min-width: var(--tab-width);
+  max-width: var(--tab-width);
   height: 34px;
   flex: 0 0 auto;
   padding: 0 12px;
@@ -78,9 +93,7 @@ body {
   cursor: pointer;
   position: relative;
   user-select: none;
-  /* 위치 이동 시 부드러운 애니메이션 효과 제공 */
-  transition: transform 0.2s ease, background 0.15s, color 0.15s;
-  transform-origin: center;
+  transition: background 0.15s, color 0.15s;
 }
 
 /* 탭간 경계 분리선 처리 */
@@ -107,12 +120,19 @@ body {
   z-index: 2;
 }
 
-/* 드래그 중인 상태 설정: 투명해지지 않고 원래 색 유지 */
+/* 드래그 중: 좌우 이동만, 투명화 없음 */
 .tab.dragging {
-  background: #ffffff;
-  z-index: 10;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transition: none; /* 드래그 중인 엘리먼트는 마우스를 즉시 따라오도록 설정 */
+  background: #ffffff !important;
+  color: #1f1f1f !important;
+  opacity: 1 !important;
+  z-index: 30;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: none;
+  cursor: grabbing;
+}
+
+.tab.dragging.active {
+  background: #ffffff !important;
 }
 
 .tab .favicon {
@@ -136,7 +156,27 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  min-width: 0;
   text-align: left;
+}
+
+/* 공간 부족 시 파비콘만 표시 */
+.tabs.compact .tab {
+  width: var(--tab-width-compact);
+  min-width: var(--tab-width-compact);
+  max-width: var(--tab-width-compact);
+  padding: 0 4px;
+  gap: 0;
+  justify-content: center;
+}
+
+.tabs.compact .tab .title,
+.tabs.compact .tab .close {
+  display: none !important;
+}
+
+.tabs.compact .tab:not(.active):not(:hover) + .tab:not(.active):not(:hover)::before {
+  display: none;
 }
 
 /* 탭 내부 닫기 버튼 */
@@ -173,8 +213,7 @@ body {
   justify-content: center;
   width: 28px;
   height: 28px;
-  margin-left: 4px;
-  margin-bottom: 3px;
+  margin: 0 0 3px 0;
   border: none;
   border-radius: 50%;
   background: transparent;

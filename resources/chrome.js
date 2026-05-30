@@ -1,7 +1,14 @@
 let bridge = null;
 let tabsUiBound = false;
+let tabDragBound = false;
+let suppressTabClick = false;
 
-// file:// chrome UI에서도 항상 보이는 기본 아이콘 (원격 차단 시 대비)
+const DRAG_THRESHOLD = 5;
+const TAB_WIDTH_FULL = 200;
+const TAB_WIDTH_COMPACT = 36;
+const TAB_GAP = 2;
+
+let layoutObserver = null;
 const FALLBACK_FAVICON =
   "data:image/svg+xml," +
   encodeURIComponent(
@@ -16,6 +23,8 @@ let state = {
   canBack: false,
   canForward: false,
 };
+
+let tabDrag = null;
 
 function initBridge() {
   if (typeof qt === "undefined") return;
@@ -47,6 +56,7 @@ function setupUi() {
     el.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
       if (e.target.closest(".no-drag")) return;
+      if (e.target.closest(".tab")) return;
       bridge.startWindowDrag();
     });
     el.addEventListener("dblclick", (e) => {
@@ -56,12 +66,18 @@ function setupUi() {
   });
 
   bindTabsUi();
+  bindTabDrag();
+  setupTabLayoutObserver();
 }
 
 function bindTabsUi() {
   if (tabsUiBound) return;
   tabsUiBound = true;
   document.getElementById("tabs").addEventListener("click", (e) => {
+    if (suppressTabClick) {
+      suppressTabClick = false;
+      return;
+    }
     const closeBtn = e.target.closest("[data-close]");
     if (closeBtn) {
       e.stopPropagation();
@@ -75,12 +91,124 @@ function bindTabsUi() {
   });
 }
 
+function bindTabDrag() {
+  if (tabDragBound) return;
+  tabDragBound = true;
+
+  const container = document.getElementById("tabs");
+  container.addEventListener("mousedown", (e) => {
+    const tab = e.target.closest(".tab");
+    if (!tab || e.button !== 0) return;
+    if (e.target.closest("[data-close]")) return;
+
+    const tabs = [...container.querySelectorAll(".tab")];
+    tabDrag = {
+      tab,
+      container,
+      tabs,
+      startX: e.clientX,
+      startIndex: tabs.indexOf(tab),
+      moved: false,
+      width: tab.offsetWidth || TAB_WIDTH_FULL,
+    };
+
+    tab.classList.add("dragging");
+    document.addEventListener("mousemove", onTabDragMove);
+    document.addEventListener("mouseup", onTabDragEnd);
+    e.preventDefault();
+  });
+}
+
+function onTabDragMove(e) {
+  if (!tabDrag) return;
+  const dx = e.clientX - tabDrag.startX;
+  if (Math.abs(dx) > DRAG_THRESHOLD) {
+    tabDrag.moved = true;
+  }
+  tabDrag.tab.style.transform = `translateX(${dx}px)`;
+
+  if (!tabDrag.moved) return;
+
+  const tabW = tabDrag.container.classList.contains("compact") ? TAB_WIDTH_COMPACT : TAB_WIDTH_FULL;
+  const shift = Math.round(dx / (tabW + TAB_GAP));
+  let targetIndex = tabDrag.startIndex + shift;
+  targetIndex = Math.max(0, Math.min(tabDrag.tabs.length - 1, targetIndex));
+
+  const currentIndex = tabDrag.tabs.indexOf(tabDrag.tab);
+  if (targetIndex === currentIndex) return;
+
+  const targetTab = tabDrag.tabs[targetIndex];
+  if (targetIndex > currentIndex) {
+    containerInsertAfter(tabDrag.container, tabDrag.tab, targetTab);
+  } else {
+    tabDrag.container.insertBefore(tabDrag.tab, targetTab);
+  }
+
+  tabDrag.tabs = [...tabDrag.container.querySelectorAll(".tab")];
+  tabDrag.startIndex = tabDrag.tabs.indexOf(tabDrag.tab);
+  tabDrag.startX = e.clientX;
+  tabDrag.tab.style.transform = "translateX(0px)";
+}
+
+function containerInsertAfter(container, node, ref) {
+  if (ref.nextSibling) {
+    container.insertBefore(node, ref.nextSibling);
+  } else {
+    container.appendChild(node);
+  }
+}
+
+function onTabDragEnd() {
+  if (!tabDrag) return;
+
+  document.removeEventListener("mousemove", onTabDragMove);
+  document.removeEventListener("mouseup", onTabDragEnd);
+
+  tabDrag.tab.style.transform = "";
+  tabDrag.tab.classList.remove("dragging");
+
+  if (tabDrag.moved) {
+    suppressTabClick = true;
+    const order = [...tabDrag.container.querySelectorAll(".tab")].map((el) =>
+      parseInt(el.getAttribute("data-id"), 10)
+    );
+    if (bridge && bridge.reorderTabs) {
+      bridge.reorderTabs(JSON.stringify(order));
+    }
+  }
+
+  tabDrag = null;
+}
+
 window.chromeUI = {
   sync(payload) {
     state = { ...state, ...payload };
     renderTabs();
     renderOmnibox();
     renderNav();
+  },
+
+  setActiveTab(activeId, partial) {
+    state.activeId = activeId;
+    if (partial) {
+      if (partial.omnibox !== undefined && document.activeElement !== document.getElementById("omnibox")) {
+        document.getElementById("omnibox").value = partial.omnibox || "";
+      }
+      if (partial.placeholder !== undefined) {
+        document.getElementById("omnibox").placeholder = partial.placeholder || "";
+      }
+      if (partial.canBack !== undefined) {
+        document.getElementById("btn-back").disabled = !partial.canBack;
+      }
+      if (partial.canForward !== undefined) {
+        document.getElementById("btn-forward").disabled = !partial.canForward;
+      }
+    }
+    document.querySelectorAll(".tab").forEach((el) => {
+      const id = parseInt(el.getAttribute("data-id"), 10);
+      el.classList.toggle("active", id === activeId);
+    });
+    requestAnimationFrame(updateTabLayout);
   },
 };
 
@@ -111,6 +239,39 @@ function setFavicon(tabEl, url) {
   img.src = next;
 }
 
+function setupTabLayoutObserver() {
+  const tabLeft = document.querySelector(".tab-left");
+  const tabStrip = document.getElementById("tab-strip");
+  if (!tabLeft || layoutObserver) return;
+
+  layoutObserver = new ResizeObserver(() => updateTabLayout());
+  layoutObserver.observe(tabLeft);
+  if (tabStrip) layoutObserver.observe(tabStrip);
+}
+
+function updateTabLayout() {
+  const container = document.getElementById("tabs");
+  const tabLeft = document.querySelector(".tab-left");
+  const newBtn = document.getElementById("btn-new-tab");
+  if (!container || !tabLeft) return;
+
+  const count = container.querySelectorAll(".tab").length;
+  if (count === 0) {
+    container.classList.remove("compact");
+    return;
+  }
+
+  const btnWidth = newBtn ? newBtn.offsetWidth + TAB_GAP : 32;
+  const available = Math.max(0, tabLeft.clientWidth - btnWidth);
+  const fullRequired = count * TAB_WIDTH_FULL + Math.max(0, count - 1) * TAB_GAP;
+
+  if (fullRequired <= available) {
+    container.classList.remove("compact");
+  } else {
+    container.classList.add("compact");
+  }
+}
+
 function renderTabs() {
   const container = document.getElementById("tabs");
   if (!container) return;
@@ -130,7 +291,6 @@ function renderTabs() {
         '<span class="favicon" aria-hidden="true"></span>' +
         '<span class="title"></span>' +
         `<span class="close no-drag" data-close="${id}">×</span>`;
-      container.appendChild(el);
     }
 
     el.classList.toggle("active", tab.id === state.activeId);
@@ -139,7 +299,13 @@ function renderTabs() {
     if (titleEl.textContent !== label) {
       titleEl.textContent = label;
     }
+    el.title = label;
     setFavicon(el, tab.favicon);
+  });
+
+  state.tabs.forEach((tab) => {
+    const el = container.querySelector(`.tab[data-id="${tab.id}"]`);
+    if (el) container.appendChild(el);
   });
 
   container.querySelectorAll(".tab").forEach((el) => {
@@ -147,6 +313,8 @@ function renderTabs() {
       el.remove();
     }
   });
+
+  requestAnimationFrame(updateTabLayout);
 }
 
 function renderOmnibox() {

@@ -164,6 +164,15 @@ class BrowserBridge(QObject):
         if wh:
             wh.startSystemMove()
 
+    @Slot(str)
+    def reorderTabs(self, order_json: str) -> None:
+        try:
+            ordered = json.loads(order_json)
+            ids = [int(x) for x in ordered]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return
+        self._window.reorder_tabs(ids)
+
 
 class PepeBrowser(QMainWindow):
     def __init__(self) -> None:
@@ -285,11 +294,63 @@ class PepeBrowser(QMainWindow):
 
     def switch_tab(self, tab_id: int) -> None:
         tab = next((t for t in self._tabs if t.tab_id == tab_id), None)
+        if not tab or self._active_id == tab_id:
+            return
+
+        self._active_id = tab_id
+        self.stack.setUpdatesEnabled(False)
+        self.stack.setCurrentWidget(tab.view)
+        self.stack.setUpdatesEnabled(True)
+        self._sync_active_chrome()
+
+    def reorder_tabs(self, ordered_ids: list[int]) -> None:
+        id_to_tab = {t.tab_id: t for t in self._tabs}
+        new_tabs: list[Tab] = []
+        for tab_id in ordered_ids:
+            if tab_id in id_to_tab:
+                new_tabs.append(id_to_tab[tab_id])
+        for tab in self._tabs:
+            if tab not in new_tabs:
+                new_tabs.append(tab)
+        if len(new_tabs) != len(self._tabs):
+            return
+
+        self._tabs = new_tabs
+        for tab in self._tabs:
+            self.stack.removeWidget(tab.view)
+        for tab in self._tabs:
+            self.stack.addWidget(tab.view)
+
+        active = self.active_tab()
+        if active:
+            self.stack.setCurrentWidget(active.view)
+
+        self._last_sync_payload = ""
+        self.sync_chrome(immediate=True)
+
+    def _sync_active_chrome(self) -> None:
+        if not self._chrome_ready:
+            return
+
+        tab = self.active_tab()
         if not tab:
             return
-        self._active_id = tab_id
-        self.stack.setCurrentWidget(tab.view)
-        self.sync_chrome(immediate=True)
+
+        url = tab.view.url()
+        home = is_home_url(url)
+        partial = {
+            "omnibox": "" if home else url.toString(),
+            "placeholder": "Google에서 검색하거나 URL을 입력하세요." if home else "",
+            "canBack": tab.view.history().canGoBack(),
+            "canForward": tab.view.history().canGoForward(),
+        }
+        blob = json.dumps(partial, ensure_ascii=False, sort_keys=True)
+        js = (
+            f"window.chromeUI&&window.chromeUI.setActiveTab("
+            f"{self._active_id},{blob});"
+        )
+        self.chrome_view.page().runJavaScript(js)
+        self.setWindowTitle(tab.title if tab.title else "Pepe Browser")
 
     def active_tab(self) -> Tab | None:
         return next((t for t in self._tabs if t.tab_id == self._active_id), None)
@@ -319,7 +380,7 @@ class PepeBrowser(QMainWindow):
         if url_str and url_str != tab.favicon:
             tab.favicon = url_str
             if tab.tab_id == self._active_id:
-                self.sync_chrome(immediate=True)
+                self.schedule_sync_chrome()
 
     def _on_url_changed(self, view: QWebEngineView, url: QUrl) -> None:
         tab = next((t for t in self._tabs if t.view is view), None)
@@ -331,7 +392,7 @@ class PepeBrowser(QMainWindow):
             tab.favicon = favicon_for_url(url)
         tab.title = title_for_url(url)
         if tab.tab_id == self._active_id:
-            self.sync_chrome(immediate=True)
+            self.schedule_sync_chrome()
 
     def _on_title_changed(self, view: QWebEngineView, title: str) -> None:
         tab = next((t for t in self._tabs if t.view is view), None)
