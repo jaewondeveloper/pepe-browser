@@ -1,6 +1,12 @@
 let bridge = null;
-const DEFAULT_FAVICON = "https://www.google.com/favicon.ico";
 let tabsUiBound = false;
+
+// file:// chrome UI에서도 항상 보이는 기본 아이콘 (원격 차단 시 대비)
+const FALLBACK_FAVICON =
+  "data:image/svg+xml," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#4285F4"/><text x="8" y="12" text-anchor="middle" fill="#fff" font-size="10" font-family="Arial">G</text></svg>'
+  );
 
 let state = {
   tabs: [],
@@ -55,8 +61,7 @@ function setupUi() {
 function bindTabsUi() {
   if (tabsUiBound) return;
   tabsUiBound = true;
-  const container = document.getElementById("tabs");
-  container.addEventListener("click", (e) => {
+  document.getElementById("tabs").addEventListener("click", (e) => {
     const closeBtn = e.target.closest("[data-close]");
     if (closeBtn) {
       e.stopPropagation();
@@ -80,19 +85,39 @@ window.chromeUI = {
 };
 
 function setFavicon(tabEl, url) {
-  const icon = tabEl.querySelector(".favicon");
-  if (!icon) return;
-  const next = url || DEFAULT_FAVICON;
-  if (icon.dataset.src === next) return;
-  icon.dataset.src = next;
-  icon.style.backgroundImage = `url("${next}")`;
+  const box = tabEl.querySelector(".favicon");
+  if (!box) return;
+
+  const next = url || FALLBACK_FAVICON;
+  if (box.dataset.src === next) return;
+  box.dataset.src = next;
+
+  let img = box.querySelector("img");
+  if (!img) {
+    img = document.createElement("img");
+    img.width = 16;
+    img.height = 16;
+    img.alt = "";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("error", () => {
+      if (img.dataset.fallbackApplied === "1") return;
+      img.dataset.fallbackApplied = "1";
+      img.src = FALLBACK_FAVICON;
+    });
+    box.appendChild(img);
+  }
+  img.dataset.fallbackApplied = "0";
+  img.src = next;
 }
 
 function renderTabs() {
   const container = document.getElementById("tabs");
+  if (!container) return;
+
   const keep = new Set();
 
-  state.tabs.forEach((tab) => {
+  (state.tabs || []).forEach((tab) => {
     const id = String(tab.id);
     keep.add(id);
     let el = container.querySelector(`.tab[data-id="${id}"]`);
@@ -110,7 +135,7 @@ function renderTabs() {
 
     el.classList.toggle("active", tab.id === state.activeId);
     const titleEl = el.querySelector(".title");
-    const label = tab.title || "새 탭";
+    const label = tab.title || "기본탭";
     if (titleEl.textContent !== label) {
       titleEl.textContent = label;
     }
