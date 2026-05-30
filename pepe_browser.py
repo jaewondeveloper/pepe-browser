@@ -390,8 +390,11 @@ class PepeBrowser(QMainWindow):
 
 
 def main() -> None:
-    configure_web_profile()
+    if not sys.argv:
+        sys.argv = ["pepe_browser"]
+
     app = QApplication(sys.argv)
+    configure_web_profile()
     app.setStyle("Fusion")
     window = PepeBrowser()
     window.show()
