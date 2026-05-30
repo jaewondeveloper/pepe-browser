@@ -331,20 +331,25 @@ body {
   transition: background-color 0.1s, color 0.1s;
 }
 
-/* 내부 선 정밀 제어용 굵기 및 비율 세팅 */
-.window-controls button svg {
+.window-controls button img {
+  display: block;
   width: 10px;
   height: 10px;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
 }
 
 .window-controls button:hover {
   background: rgba(0, 0, 0, 0.08);
-  color: #202124;
 }
 
 .window-controls #btn-close:hover {
   background: #e81123;
-  color: #fff;
+}
+
+.window-controls #btn-close:hover img {
+  filter: brightness(0) invert(1);
 }
 
 /* 툴바 & 주소창 영역 */
