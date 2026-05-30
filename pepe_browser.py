@@ -300,9 +300,11 @@ class PepeBrowser(QMainWindow):
 
         if self._active_id == tab_id:
             new_idx = min(idx, len(self._tabs) - 1)
-            self.switch_tab(self._tabs[new_idx].tab_id)
-        else:
-            self.sync_chrome(immediate=True)
+            self._active_id = self._tabs[new_idx].tab_id
+            self.stack.setCurrentWidget(self._tabs[new_idx].view)
+
+        self._last_sync_payload = ""
+        self.sync_chrome(immediate=True)
 
     def switch_tab(self, tab_id: int) -> None:
         tab = next((t for t in self._tabs if t.tab_id == tab_id), None)

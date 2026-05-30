@@ -53,9 +53,26 @@ body {
   align-items: flex-end;
   flex: 1 1 auto;
   min-width: 0;
-  max-width: none;
-  gap: 2px;
   overflow: hidden;
+}
+
+/* 탭 + 새 탭 버튼이 함께 스크롤/이동 */
+.tab-scroll {
+  display: flex;
+  align-items: flex-end;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: 34px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  gap: 2px;
+}
+
+.tab-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 /* 탭들이 배치되는 컨테이너 */
@@ -63,9 +80,9 @@ body {
   display: flex;
   align-items: flex-end;
   height: 34px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  overflow-x: auto;
+  overflow: visible;
   position: relative;
   scrollbar-width: none;
 }

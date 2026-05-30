@@ -10,10 +10,12 @@
     <div class="chrome">
       <div class="tab-strip drag-region" id="tab-strip">
         <div class="tab-left no-drag">
-          <div class="tabs no-drag" id="tabs"></div>
-          <button type="button" class="new-tab no-drag" id="btn-new-tab" title="새 탭">
-            <svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 3.5a.5.5 0 0 1 .5.5v3.5H12a.5.5 0 0 1 0 1H8.5V12a.5.5 0 0 1-1 0V8.5H4a.5.5 0 0 1 0-1h3.5V4a.5.5 0 0 1 .5-.5z"/></svg>
-          </button>
+          <div class="tab-scroll no-drag" id="tab-scroll">
+            <div class="tabs no-drag" id="tabs"></div>
+            <button type="button" class="new-tab no-drag" id="btn-new-tab" title="새 탭">
+              <svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M8 3.5a.5.5 0 0 1 .5.5v3.5H12a.5.5 0 0 1 0 1H8.5V12a.5.5 0 0 1-1 0V8.5H4a.5.5 0 0 1 0-1h3.5V4a.5.5 0 0 1 .5-.5z"/></svg>
+            </button>
+          </div>
         </div>
         <div class="tab-strip-spacer drag-region"></div>
         
