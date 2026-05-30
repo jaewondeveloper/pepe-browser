@@ -337,8 +337,8 @@ body {
 
 .window-controls button img {
   display: block;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   object-fit: contain;
   pointer-events: none;
   user-select: none;
