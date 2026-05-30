@@ -14,6 +14,7 @@ from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
+from content_webview import ContentWebView
 from win_frame import prepare_frameless_window
 
 ROOT = Path(__file__).resolve().parent
@@ -94,7 +95,7 @@ def favicon_for_url(url: QUrl) -> str:
 @dataclass
 class Tab:
     tab_id: int
-    view: QWebEngineView
+    view: ContentWebView
     title: str = DEFAULT_TAB_TITLE
     favicon: str = "https://www.google.com/favicon.ico"
     last_host: str = ""
@@ -222,6 +223,7 @@ class PepeBrowser(QMainWindow):
         self.chrome_view.setFixedHeight(CHROME_HEIGHT)
         self.chrome_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.chrome_view.setAutoFillBackground(True)
+        self.chrome_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         apply_fast_settings(self.chrome_view.settings(), chrome_ui=True)
         self._setup_channel(self.chrome_view)
         self.chrome_view.loadFinished.connect(self._on_chrome_loaded)
@@ -249,8 +251,11 @@ class PepeBrowser(QMainWindow):
         vp.setColor(QPalette.ColorRole.Window, QColor(CONTENT_BG))
         view.setPalette(vp)
 
+    def create_tab_from_context(self) -> None:
+        self.create_tab(DEFAULT_URL)
+
     def create_tab(self, url: QUrl) -> Tab:
-        view = QWebEngineView(self)
+        view = ContentWebView(self, self)
         view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._setup_channel(view)
 

@@ -78,6 +78,7 @@ function setupUi() {
 
   document.addEventListener("click", hideTabContextMenu);
   document.addEventListener("contextmenu", (e) => {
+    if (!e.target.closest(".tab")) e.preventDefault();
     if (!e.target.closest("#tab-context-menu")) hideTabContextMenu();
   });
   window.addEventListener("resize", () => requestAnimationFrame(updateTabLayout));
