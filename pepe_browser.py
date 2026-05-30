@@ -47,6 +47,7 @@ def apply_fast_settings(settings: QWebEngineSettings, *, chrome_ui: bool = False
     settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
     if chrome_ui:
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
@@ -253,6 +254,10 @@ class PepeBrowser(QMainWindow):
 
     def create_tab_from_context(self) -> None:
         self.create_tab(DEFAULT_URL)
+
+    def open_url_in_new_tab(self, url: QUrl) -> None:
+        if url.isValid():
+            self.create_tab(url)
 
     def create_tab(self, url: QUrl) -> Tab:
         view = ContentWebView(self, self)

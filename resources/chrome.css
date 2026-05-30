@@ -375,6 +375,7 @@ body {
 
 /* 툴바 & 주소창 영역 */
 .toolbar {
+  -webkit-app-region: drag;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -475,23 +476,25 @@ body {
   color: #202124;
 }
 
-/* 탭 우클릭 메뉴 */
+/* 탭 우클릭 메뉴 (Edge 스타일) */
 .tab-context-menu {
   position: fixed;
   z-index: 10000;
-  min-width: 168px;
-  padding: 6px 0;
-  border-radius: 8px;
+  min-width: 280px;
+  padding: 8px;
+  border-radius: 10px;
   background: #fff;
-  border: 1px solid #dadce0;
-  box-shadow: 0 4px 16px rgba(60, 64, 67, 0.28);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 24px rgba(60, 64, 67, 0.28);
 }
 
 .tab-context-menu button {
   display: block;
   width: 100%;
-  padding: 8px 16px;
+  padding: 10px 12px;
+  margin: 2px 0;
   border: none;
+  border-radius: 6px;
   background: transparent;
   color: #202124;
   font-size: 13px;

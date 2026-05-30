@@ -58,17 +58,18 @@ function setupUi() {
     if (e.key === "Enter") bridge.navigate(omnibox.value);
   });
 
-  document.querySelectorAll(".drag-region").forEach((el) => {
-    el.addEventListener("mousedown", (e) => {
-      if (e.button !== 0) return;
-      if (e.target.closest(".no-drag")) return;
-      if (e.target.closest(".tab")) return;
-      bridge.startWindowDrag();
-    });
-    el.addEventListener("dblclick", (e) => {
-      if (e.target.closest(".no-drag")) return;
-      bridge.toggleMaximize();
-    });
+  const chromeRoot = document.querySelector(".chrome");
+  const dragBlock =
+    ".tab, .new-tab, .window-controls, #tabs, button, input, textarea, select, a, .ob-icon, .gemini-btn, #tab-context-menu, .tab-context-menu";
+
+  chromeRoot.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest(dragBlock)) return;
+    bridge.startWindowDrag();
+  });
+  chromeRoot.addEventListener("dblclick", (e) => {
+    if (e.target.closest(dragBlock)) return;
+    bridge.toggleMaximize();
   });
 
   bindTabsUi();
