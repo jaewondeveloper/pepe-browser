@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QFile, Qt, QUrl
+from PySide6.QtCore import QFile, QPoint, Qt, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage
@@ -18,10 +19,11 @@ from pepe_context_menu import PepeContextMenu
 if TYPE_CHECKING:
     from pepe_browser import PepeBrowser
 
-WINDOW_DRAG_SCRIPT = """
+PAGE_HELPER_SCRIPT = """
 (function () {
-  if (window.__pepeDragBound) return;
-  window.__pepeDragBound = true;
+  if (window.__pepePageHelpers) return;
+  window.__pepePageHelpers = true;
+
   document.addEventListener(
     "mousedown",
     function (e) {
@@ -33,6 +35,25 @@ WINDOW_DRAG_SCRIPT = """
     },
     false
   );
+
+  document.addEventListener(
+    "contextmenu",
+    function (e) {
+      e.preventDefault();
+      var el = e.target;
+      var img = el.tagName === "IMG" ? el : el.closest("img");
+      var a = img ? null : el.closest("a");
+      var payload = {
+        isImage: !!img,
+        imageUrl: img ? (img.currentSrc || img.src || "") : "",
+        linkUrl: a ? (a.href || "") : ""
+      };
+      if (typeof bridge !== "undefined" && bridge.showPageContextMenu) {
+        bridge.showPageContextMenu(e.clientX, e.clientY, JSON.stringify(payload));
+      }
+    },
+    true
+  );
 })();
 """
 
@@ -43,47 +64,77 @@ class ContentWebView(QWebEngineView):
         self._browser = browser
         self._nam = QNetworkAccessManager(self)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.page().contextMenuRequested.connect(self._on_context_menu_requested)
-        self.loadFinished.connect(self._inject_window_drag)
+        self.loadFinished.connect(self._inject_page_helpers)
 
     def contextMenuEvent(self, event) -> None:
         event.accept()
+        if hasattr(self, "lastContextMenuRequest"):
+            try:
+                request = self.lastContextMenuRequest()
+                if request is not None:
+                    self._show_page_context_menu_from_request(
+                        request, event.globalPos()
+                    )
+                    return
+            except Exception:
+                pass
 
-    def _inject_window_drag(self, ok: bool) -> None:
+    def _inject_page_helpers(self, ok: bool) -> None:
         if not ok:
             return
         channel_file = QFile("qrc:///qtwebchannel/qwebchannel.js")
         if not channel_file.open(QFile.OpenModeFlag.ReadOnly):
-            self.page().runJavaScript(WINDOW_DRAG_SCRIPT)
+            self.page().runJavaScript(PAGE_HELPER_SCRIPT)
             return
         qwc = bytes(channel_file.readAll()).decode("utf-8")
         boot = (
             qwc
             + "\nnew QWebChannel(qt.webChannelTransport,function(c){"
             "window.bridge=c.objects.bridge;});\n"
-            + WINDOW_DRAG_SCRIPT
+            + PAGE_HELPER_SCRIPT
         )
         self.page().runJavaScript(boot)
 
-    def _on_context_menu_requested(self, request: QWebEngineContextMenuRequest) -> None:
-        request.accept()
-        global_pos = self.mapToGlobal(request.position())
-        self._show_page_context_menu(request, global_pos)
+    def show_context_menu_from_bridge(
+        self, view_x: int, view_y: int, info_json: str
+    ) -> None:
+        try:
+            info: dict[str, Any] = json.loads(info_json)
+        except json.JSONDecodeError:
+            info = {}
+        global_pos = self.mapToGlobal(QPoint(view_x, view_y))
+        self._show_page_context_menu_from_info(info, global_pos)
 
-    def _show_page_context_menu(
+    def _show_page_context_menu_from_request(
         self, request: QWebEngineContextMenuRequest, global_pos
     ) -> None:
-        menu = PepeContextMenu()
-        media_type = request.mediaType()
-        media_url = request.mediaUrl()
-        link_url = request.linkUrl()
-        is_image = media_type == QWebEngineContextMenuRequest.MediaType.MediaTypeImage and media_url.isValid()
+        is_image = (
+            request.mediaType()
+            == QWebEngineContextMenuRequest.MediaType.MediaTypeImage
+            and request.mediaUrl().isValid()
+        )
+        info = {
+            "isImage": is_image,
+            "imageUrl": request.mediaUrl().toString() if is_image else "",
+            "linkUrl": request.linkUrl().toString()
+            if request.linkUrl().isValid() and not is_image
+            else "",
+        }
+        self._show_page_context_menu_from_info(info, global_pos)
 
-        if is_image:
-            img_url = media_url.toString()
+    def _show_page_context_menu_from_info(
+        self, info: dict[str, Any], global_pos
+    ) -> None:
+        menu = PepeContextMenu()
+        is_image = bool(info.get("isImage"))
+        image_url = str(info.get("imageUrl") or "")
+        link_url = str(info.get("linkUrl") or "")
+
+        if is_image and image_url:
+            media_url = QUrl(image_url)
             menu.add_action(
                 "새 탭에서 이미지 열기",
-                lambda: self._browser.open_url_in_new_tab(QUrl(img_url)),
+                lambda: self._browser.open_url_in_new_tab(media_url),
             )
             menu.add_action(
                 "다른 이름으로 사진 저장",
@@ -95,17 +146,17 @@ class ContentWebView(QWebEngineView):
             )
             menu.add_action(
                 "이미지 링크 복사",
-                lambda: self._copy_text(img_url),
+                lambda: self._copy_text(image_url),
             )
             menu.add_separator()
 
-        if link_url.isValid() and not is_image:
-            link = link_url.toString()
+        if link_url and not is_image:
+            link = QUrl(link_url)
             menu.add_action(
                 "새 탭에서 링크 열기",
-                lambda: self._browser.open_url_in_new_tab(link_url),
+                lambda: self._browser.open_url_in_new_tab(link),
             )
-            menu.add_action("링크 복사", lambda: self._copy_text(link))
+            menu.add_action("링크 복사", lambda: self._copy_text(link_url))
             menu.add_separator()
 
         menu.add_action(
@@ -128,7 +179,7 @@ class ContentWebView(QWebEngineView):
         )
         menu.add_separator()
 
-        if is_image:
+        if is_image and image_url:
             menu.add_action(
                 "Gemini에게 이 이미지에 대해 물어보기",
                 lambda: self._browser.open_url_in_new_tab(
@@ -144,18 +195,26 @@ class ContentWebView(QWebEngineView):
         QGuiApplication.clipboard().setText(text)
 
     def _copy_image(self, url: QUrl) -> None:
+        action = getattr(QWebEnginePage.WebAction, "CopyImageToClipboard", None)
+        if action is not None:
+            self.page().triggerAction(action)
+            return
         reply = self._nam.get(QNetworkRequest(url))
         reply.finished.connect(lambda r=reply: self._on_image_bytes(r, save_as=False))
 
     def _save_image(self, url: QUrl) -> None:
+        action = getattr(QWebEnginePage.WebAction, "DownloadImageToDisk", None)
+        if action is not None:
+            self.page().triggerAction(action)
+            return
+
         path_part = urlparse(url.path()).path
         suggested = Path(path_part).name if path_part else "image"
         if not suggested or suggested == ".":
             suggested = "image"
         ext = Path(suggested).suffix
         if not ext:
-            ext = ".png"
-            suggested += ext
+            suggested += ".png"
 
         dest, _ = QFileDialog.getSaveFileName(
             self,

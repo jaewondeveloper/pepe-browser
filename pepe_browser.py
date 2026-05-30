@@ -172,6 +172,12 @@ class BrowserBridge(QObject):
         if wh:
             wh.startSystemMove()
 
+    @Slot(int, int, str)
+    def showPageContextMenu(self, x: int, y: int, info_json: str) -> None:
+        tab = self._window.active_tab()
+        if tab:
+            tab.view.show_context_menu_from_bridge(x, y, info_json)
+
     @Slot(str)
     def reorderTabs(self, order_json: str) -> None:
         try:
