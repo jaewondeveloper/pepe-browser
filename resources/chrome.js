@@ -1,4 +1,7 @@
 let bridge = null;
+const DEFAULT_FAVICON = "https://www.google.com/favicon.ico";
+let tabsUiBound = false;
+
 let state = {
   tabs: [],
   activeId: 0,
@@ -9,17 +12,7 @@ let state = {
 };
 
 function initBridge() {
-  if (typeof qt === "undefined") {
-    // 테스트용 데이터 구성
-    state.tabs = [
-      { id: 1, title: "새 탭", favicon: "" },
-      { id: 2, title: "GitHub", favicon: "https://github.com/favicon.ico" },
-      { id: 3, title: "YouTube", favicon: "https://www.youtube.com/favicon.ico" }
-    ];
-    state.activeId = 1;
-    renderTabs();
-    return;
-  }
+  if (typeof qt === "undefined") return;
   new QWebChannel(qt.webChannelTransport, (channel) => {
     bridge = channel.objects.bridge;
     setupUi();
@@ -55,6 +48,26 @@ function setupUi() {
       bridge.toggleMaximize();
     });
   });
+
+  bindTabsUi();
+}
+
+function bindTabsUi() {
+  if (tabsUiBound) return;
+  tabsUiBound = true;
+  const container = document.getElementById("tabs");
+  container.addEventListener("click", (e) => {
+    const closeBtn = e.target.closest("[data-close]");
+    if (closeBtn) {
+      e.stopPropagation();
+      bridge.closeTab(parseInt(closeBtn.getAttribute("data-close"), 10));
+      return;
+    }
+    const tabEl = e.target.closest(".tab");
+    if (tabEl) {
+      bridge.switchTab(parseInt(tabEl.getAttribute("data-id"), 10));
+    }
+  });
 }
 
 window.chromeUI = {
@@ -66,103 +79,54 @@ window.chromeUI = {
   },
 };
 
-function renderTabs() {
-  const container = document.getElementById("tabs");
-  container.innerHTML = "";
-  state.tabs.forEach((tab) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "tab" + (tab.id === state.activeId ? " active" : "");
-    btn.setAttribute("data-id", tab.id);
-    
-    btn.innerHTML = `
-      <img class="favicon" src="${tab.favicon || "https://www.google.com/favicon.ico"}" alt="" onerror="this.src='https://www.google.com/favicon.ico'"/>
-      <span class="title">${escapeHtml(tab.title || "새 탭")}</span>
-      <span class="close" data-close="${tab.id}">×</span>
-    `;
-    
-    btn.addEventListener("click", (e) => {
-      if (e.target.closest("[data-close]")) return;
-      if (bridge) bridge.switchTab(tab.id);
-    });
-    
-    btn.querySelector(".close").addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (bridge) bridge.closeTab(tab.id);
-    });
-    
-    container.appendChild(btn);
-  });
-  
-  // 투명해지지 않는 고유의 커스텀 좌우 슬라이드 리스너 장착
-  setupInPlaceTabDrag();
+function setFavicon(tabEl, url) {
+  const icon = tabEl.querySelector(".favicon");
+  if (!icon) return;
+  const next = url || DEFAULT_FAVICON;
+  if (icon.dataset.src === next) return;
+  icon.dataset.src = next;
+  icon.style.backgroundImage = `url("${next}")`;
 }
 
-/* 마우스 트래킹 방식의 투명화 없는 고성능 좌우 이동 스크립트 */
-function setupInPlaceTabDrag() {
+function renderTabs() {
   const container = document.getElementById("tabs");
-  const tabs = Array.from(container.querySelectorAll(".tab"));
-  
-  tabs.forEach((tab) => {
-    tab.addEventListener("mousedown", (e) => {
-      if (e.button !== 0) return; // 좌클릭만 허용
-      if (e.target.closest("[data-close]")) return; // 닫기 버튼은 무시
-      
-      let startX = e.clientX;
-      let currentIdx = tabs.indexOf(tab);
-      let tabWidth = tab.offsetWidth;
-      
-      tab.classList.add("dragging");
-      
-      function onMouseMove(moveEvent) {
-        let deltaX = moveEvent.clientX - startX;
-        tab.style.transform = `translateX(${deltaX}px)`;
-        
-        // 실시간으로 좌측 혹은 우측의 탭 경계를 넘었는지 판단 후 DOM 노드 실시간 교체
-        let targetIdx = currentIdx + Math.round(deltaX / tabWidth);
-        targetIdx = Math.max(0, Math.min(tabs.length - 1, targetIdx));
-        
-        if (targetIdx !== currentIdx) {
-          const targetTab = tabs[targetIdx];
-          if (targetIdx > currentIdx) {
-            container.insertBefore(tab, targetTab.nextSibling);
-          } else {
-            container.insertBefore(tab, targetTab);
-          }
-          
-          // 내부 인덱스 데이터 동기화 갱신
-          tabs.splice(currentIdx, 1);
-          tabs.splice(targetIdx, 0, tab);
-          currentIdx = targetIdx;
-          startX = moveEvent.clientX; 
-          tab.style.transform = `translateX(0px)`;
-        }
-      }
-      
-      function onMouseUp() {
-        tab.classList.remove("dragging");
-        tab.style.transform = "";
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        
-        // 최종 변경 완료된 ID 순서 배열 추출 및 백엔드 전송부
-        const finalIds = Array.from(container.querySelectorAll(".tab")).map(el => 
-          parseInt(el.getAttribute("data-id"))
-        );
-        if (bridge && bridge.updateTabsOrder) {
-          bridge.updateTabsOrder(finalIds);
-        }
-      }
-      
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-    });
+  const keep = new Set();
+
+  state.tabs.forEach((tab) => {
+    const id = String(tab.id);
+    keep.add(id);
+    let el = container.querySelector(`.tab[data-id="${id}"]`);
+    if (!el) {
+      el = document.createElement("button");
+      el.type = "button";
+      el.className = "tab no-drag";
+      el.setAttribute("data-id", id);
+      el.innerHTML =
+        '<span class="favicon" aria-hidden="true"></span>' +
+        '<span class="title"></span>' +
+        `<span class="close no-drag" data-close="${id}">×</span>`;
+      container.appendChild(el);
+    }
+
+    el.classList.toggle("active", tab.id === state.activeId);
+    const titleEl = el.querySelector(".title");
+    const label = tab.title || "새 탭";
+    if (titleEl.textContent !== label) {
+      titleEl.textContent = label;
+    }
+    setFavicon(el, tab.favicon);
+  });
+
+  container.querySelectorAll(".tab").forEach((el) => {
+    if (!keep.has(el.getAttribute("data-id"))) {
+      el.remove();
+    }
   });
 }
 
 function renderOmnibox() {
   const el = document.getElementById("omnibox");
-  el.placeholder = state.placeholder || "";
+  el.placeholder = state.placeholder || "Google에서 검색하거나 URL을 입력하세요.";
   if (document.activeElement !== el) {
     el.value = state.omnibox || "";
   }
@@ -171,14 +135,6 @@ function renderOmnibox() {
 function renderNav() {
   document.getElementById("btn-back").disabled = !state.canBack;
   document.getElementById("btn-forward").disabled = !state.canForward;
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 initBridge();

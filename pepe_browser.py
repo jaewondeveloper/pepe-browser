@@ -7,43 +7,31 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QUrl, QUrlQuery, Slot
-from PySide6.QtGui import QResizeEvent, QShowEvent
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, QUrlQuery, Slot
+from PySide6.QtGui import QColor, QPalette, QShowEvent
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
-from win_frame import apply_round_window_region, apply_windows_rounded_frame
+from win_frame import prepare_frameless_window
 
 ROOT = Path(__file__).resolve().parent
-WINDOW_RADIUS = 10
 RESOURCES = ROOT / "resources"
-HOME_URL = QUrl.fromLocalFile(str((RESOURCES / "home.html").resolve()))
+DEFAULT_URL = QUrl("https://www.google.com/")
+NTP_URL = QUrl.fromLocalFile(str((RESOURCES / "home.html").resolve()))
 CHROME_URL = QUrl.fromLocalFile(str((RESOURCES / "chrome.html").resolve()))
-HOME_PATH = HOME_URL.toLocalFile().replace("\\", "/").lower()
-CHROME_HEIGHT = 88
+# tab-strip 40px + toolbar 40px (chrome.css와 동일)
+CHROME_HEIGHT = 80
 
-WINDOW_STYLE = f"""
-QMainWindow {{
-    background: #dee1e6;
-}}
-QWidget#browserRoot {{
-    background: #dee1e6;
-    border-radius: {WINDOW_RADIUS}px;
-}}
-QStackedWidget {{
-    background: #ffffff;
-    border-bottom-left-radius: {WINDOW_RADIUS}px;
-    border-bottom-right-radius: {WINDOW_RADIUS}px;
-}}
-"""
+CHROME_BG = "#dee1e6"
+CONTENT_BG = "#ffffff"
 
 
 def normalize_url(text: str) -> QUrl:
     raw = text.strip()
     if not raw:
-        return HOME_URL
+        return DEFAULT_URL
     if raw.startswith(("http://", "https://", "file://")):
         return QUrl(raw)
     if "." in raw and " " not in raw:
@@ -56,9 +44,11 @@ def normalize_url(text: str) -> QUrl:
 
 
 def is_home_url(url: QUrl) -> bool:
-    if url.scheme() != "file":
+    if url.scheme() not in ("http", "https"):
         return False
-    return url.toLocalFile().replace("\\", "/").lower() == HOME_PATH
+    host = url.host().lower().removeprefix("www.")
+    path = url.path() or "/"
+    return host == "google.com" and path in ("", "/")
 
 
 def favicon_for_url(url: QUrl) -> str:
@@ -76,6 +66,7 @@ class Tab:
     view: QWebEngineView
     title: str = "새 탭"
     favicon: str = "https://www.google.com/favicon.ico"
+    last_host: str = ""
 
 
 class BrowserBridge(QObject):
@@ -89,7 +80,7 @@ class BrowserBridge(QObject):
 
     @Slot()
     def newTab(self) -> None:
-        self._window.create_tab(HOME_URL)
+        self._window.create_tab(DEFAULT_URL)
 
     @Slot(int)
     def switchTab(self, tab_id: int) -> None:
@@ -149,17 +140,32 @@ class PepeBrowser(QMainWindow):
         self.setWindowTitle("Pepe Browser")
         self.resize(1280, 800)
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
-        self.setStyleSheet(WINDOW_STYLE)
-        self._dwm_rounded = False
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAutoFillBackground(True)
+
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(CHROME_BG))
+        self.setPalette(palette)
 
         self._tabs: list[Tab] = []
         self._next_id = 1
         self._active_id = 0
         self._bridge = BrowserBridge(self)
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.setInterval(120)
+        self._sync_timer.timeout.connect(self._do_sync_chrome)
+        self._last_sync_payload = ""
 
         central = QWidget(self)
         central.setObjectName("browserRoot")
+        central.setAutoFillBackground(True)
+        central.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        cp = central.palette()
+        cp.setColor(QPalette.ColorRole.Window, QColor(CHROME_BG))
+        central.setPalette(cp)
         self.setCentralWidget(central)
+
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -167,24 +173,37 @@ class PepeBrowser(QMainWindow):
         self.chrome_view = QWebEngineView(self)
         self.chrome_view.setFixedHeight(CHROME_HEIGHT)
         self.chrome_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.chrome_view.setAutoFillBackground(True)
+        self.chrome_view.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         chrome_settings = self.chrome_view.settings()
         chrome_settings.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
         chrome_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         self._setup_channel(self.chrome_view)
-        self.chrome_view.loadFinished.connect(lambda _ok: self.sync_chrome())
+        self.chrome_view.loadFinished.connect(lambda _ok: self.schedule_sync_chrome())
         self.chrome_view.load(CHROME_URL)
         layout.addWidget(self.chrome_view)
 
         self.stack = QStackedWidget(self)
+        self.stack.setAutoFillBackground(True)
+        self.stack.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        sp = self.stack.palette()
+        sp.setColor(QPalette.ColorRole.Window, QColor(CONTENT_BG))
+        self.stack.setPalette(sp)
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.stack, 1)
 
-        self.create_tab(HOME_URL)
+        self.create_tab(DEFAULT_URL)
 
     def _setup_channel(self, view: QWebEngineView) -> None:
         channel = QWebChannel(view.page())
         channel.registerObject("bridge", self._bridge)
         view.page().setWebChannel(channel)
+        view.setAutoFillBackground(True)
+        view.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        vp = view.palette()
+        vp.setColor(QPalette.ColorRole.Base, QColor(CONTENT_BG))
+        vp.setColor(QPalette.ColorRole.Window, QColor(CONTENT_BG))
+        view.setPalette(vp)
 
     def create_tab(self, url: QUrl) -> Tab:
         view = QWebEngineView(self)
@@ -192,7 +211,7 @@ class PepeBrowser(QMainWindow):
         self._setup_channel(view)
         view.urlChanged.connect(lambda u, v=view: self._on_url_changed(v, u))
         view.titleChanged.connect(lambda t, v=view: self._on_title_changed(v, t))
-        view.loadFinished.connect(lambda _ok, v=view: self.sync_chrome())
+        view.loadFinished.connect(lambda _ok, v=view: self._on_tab_load_finished(v))
 
         tab_id = self._next_id
         self._next_id += 1
@@ -205,8 +224,8 @@ class PepeBrowser(QMainWindow):
 
     def close_tab(self, tab_id: int) -> None:
         if len(self._tabs) <= 1:
-            self.active_tab().view.setUrl(HOME_URL)
-            self.sync_chrome()
+            self.active_tab().view.setUrl(DEFAULT_URL)
+            self.schedule_sync_chrome()
             return
 
         idx = next((i for i, t in enumerate(self._tabs) if t.tab_id == tab_id), -1)
@@ -221,7 +240,7 @@ class PepeBrowser(QMainWindow):
             new_idx = min(idx, len(self._tabs) - 1)
             self.switch_tab(self._tabs[new_idx].tab_id)
         else:
-            self.sync_chrome()
+            self.schedule_sync_chrome()
 
     def switch_tab(self, tab_id: int) -> None:
         tab = next((t for t in self._tabs if t.tab_id == tab_id), None)
@@ -229,7 +248,7 @@ class PepeBrowser(QMainWindow):
             return
         self._active_id = tab_id
         self.stack.setCurrentWidget(tab.view)
-        self.sync_chrome()
+        self.schedule_sync_chrome()
 
     def active_tab(self) -> Tab | None:
         return next((t for t in self._tabs if t.tab_id == self._active_id), None)
@@ -239,17 +258,25 @@ class PepeBrowser(QMainWindow):
         if tab:
             tab.view.setUrl(url)
 
+    def _on_tab_load_finished(self, view: QWebEngineView) -> None:
+        tab = next((t for t in self._tabs if t.view is view), None)
+        if tab and tab.tab_id == self._active_id:
+            self.schedule_sync_chrome()
+
     def _on_url_changed(self, view: QWebEngineView, url: QUrl) -> None:
         tab = next((t for t in self._tabs if t.view is view), None)
         if not tab:
             return
-        tab.favicon = favicon_for_url(url)
+        host = (url.host() or "").lower()
+        if host != tab.last_host:
+            tab.last_host = host
+            tab.favicon = favicon_for_url(url)
         if is_home_url(url):
-            tab.title = "새 탭"
+            tab.title = "Google"
         elif url.host():
             tab.title = url.host()
         if tab.tab_id == self._active_id:
-            self.sync_chrome()
+            self.schedule_sync_chrome()
 
     def _on_title_changed(self, view: QWebEngineView, title: str) -> None:
         tab = next((t for t in self._tabs if t.view is view), None)
@@ -257,9 +284,15 @@ class PepeBrowser(QMainWindow):
             return
         tab.title = title[:40]
         if tab.tab_id == self._active_id:
-            self.sync_chrome()
+            self.schedule_sync_chrome()
+
+    def schedule_sync_chrome(self) -> None:
+        self._sync_timer.start()
 
     def sync_chrome(self) -> None:
+        self.schedule_sync_chrome()
+
+    def _do_sync_chrome(self) -> None:
         tab = self.active_tab()
         if not tab:
             return
@@ -276,22 +309,27 @@ class PepeBrowser(QMainWindow):
             "canBack": tab.view.history().canGoBack(),
             "canForward": tab.view.history().canGoForward(),
         }
-        js = f"window.chromeUI&&window.chromeUI.sync({json.dumps(payload, ensure_ascii=False)});"
+        blob = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        if blob == self._last_sync_payload:
+            return
+        self._last_sync_payload = blob
+
+        js = f"window.chromeUI&&window.chromeUI.sync({blob});"
         self.chrome_view.page().runJavaScript(js)
 
         if not home and tab.view.title():
             self.setWindowTitle(tab.view.title())
         else:
-            self.setWindowTitle("새 탭")
+            self.setWindowTitle("Google")
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
-        self._dwm_rounded = apply_windows_rounded_frame(self, WINDOW_RADIUS)
+        prepare_frameless_window(self)
 
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        if sys.platform == "win32" and not self._dwm_rounded:
-            apply_round_window_region(self, WINDOW_RADIUS)
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            prepare_frameless_window(self)
 
 
 def main() -> None:
