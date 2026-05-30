@@ -47,7 +47,6 @@ def apply_fast_settings(settings: QWebEngineSettings, *, chrome_ui: bool = False
     settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
     settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
-    settings.setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
     if chrome_ui:
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)

@@ -187,4 +187,6 @@ class ContentWebView(QWebEngineView):
             QGuiApplication.clipboard().setImage(img)
 
     def _inspect_element(self) -> None:
-        self.page().triggerAction(QWebEnginePage.WebAction.InspectElement)
+        action = getattr(QWebEnginePage.WebAction, "InspectElement", None)
+        if action is not None:
+            self.page().triggerAction(action)
