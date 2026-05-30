@@ -402,13 +402,18 @@ class PepeBrowser(QMainWindow):
         if tab.tab_id == self._active_id:
             self.sync_chrome()
 
+    def schedule_sync_chrome(self) -> None:
+        if not self._chrome_ready:
+            return
+        self._sync_timer.start()
+
     def sync_chrome(self, *, immediate: bool = False) -> None:
-        if immediate or not self._chrome_ready:
+        if immediate:
             if self._chrome_ready:
                 self._last_sync_payload = ""
                 self._do_sync_chrome()
             return
-        self._sync_timer.start()
+        self.schedule_sync_chrome()
 
     def _do_sync_chrome(self) -> None:
         if not self._chrome_ready or not self._tabs:
