@@ -1,0 +1,16 @@
+/third_party/
+/build/
+__pycache__/
+*.pyc
+.pytest_cache/
+/out/
+/.vs/
+*.user
+*.suo
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+!scripts/
