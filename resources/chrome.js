@@ -2,11 +2,13 @@ let bridge = null;
 let tabsUiBound = false;
 let tabDragBound = false;
 let suppressTabClick = false;
+let contextMenuTabId = null;
 
-const DRAG_THRESHOLD = 5;
+const DRAG_THRESHOLD = 4;
 const TAB_WIDTH_FULL = 200;
 const TAB_WIDTH_COMPACT = 36;
 const TAB_GAP = 2;
+const COMPACT_MIN_TABS = 6;
 
 let layoutObserver = null;
 const FALLBACK_FAVICON =
@@ -14,6 +16,10 @@ const FALLBACK_FAVICON =
   encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#4285F4"/><text x="8" y="12" text-anchor="middle" fill="#fff" font-size="10" font-family="Arial">G</text></svg>'
   );
+
+const GOOGLE_SPINNER_SVG = `<svg class="google-spinner" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+  <circle cx="12" cy="12" r="9" fill="none" stroke="#4285F4" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="14 42" />
+</svg>`;
 
 let state = {
   tabs: [],
@@ -67,7 +73,14 @@ function setupUi() {
 
   bindTabsUi();
   bindTabDrag();
+  bindTabContextMenu();
   setupTabLayoutObserver();
+
+  document.addEventListener("click", hideTabContextMenu);
+  document.addEventListener("contextmenu", (e) => {
+    if (!e.target.closest("#tab-context-menu")) hideTabContextMenu();
+  });
+  window.addEventListener("resize", () => requestAnimationFrame(updateTabLayout));
 }
 
 function bindTabsUi() {
@@ -91,6 +104,46 @@ function bindTabsUi() {
   });
 }
 
+function bindTabContextMenu() {
+  const menu = document.getElementById("tab-context-menu");
+  const container = document.getElementById("tabs");
+  if (!menu || !container) return;
+
+  container.addEventListener("contextmenu", (e) => {
+    const tabEl = e.target.closest(".tab");
+    if (!tabEl) return;
+    e.preventDefault();
+    contextMenuTabId = parseInt(tabEl.getAttribute("data-id"), 10);
+    menu.hidden = false;
+    const x = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8);
+    const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+  });
+
+  menu.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn || contextMenuTabId == null) return;
+    const action = btn.getAttribute("data-action");
+    const id = contextMenuTabId;
+    hideTabContextMenu();
+    if (action === "new-tab") bridge.newTab();
+    else if (action === "reload-tab" && bridge.reloadTab) bridge.reloadTab(id);
+    else if (action === "close-tab") bridge.closeTab(id);
+    else if (action === "close-others") {
+      [...(state.tabs || [])].forEach((t) => {
+        if (t.id !== id) bridge.closeTab(t.id);
+      });
+    }
+  });
+}
+
+function hideTabContextMenu() {
+  const menu = document.getElementById("tab-context-menu");
+  if (menu) menu.hidden = true;
+  contextMenuTabId = null;
+}
+
 function bindTabDrag() {
   if (tabDragBound) return;
   tabDragBound = true;
@@ -101,15 +154,13 @@ function bindTabDrag() {
     if (!tab || e.button !== 0) return;
     if (e.target.closest("[data-close]")) return;
 
-    const tabs = [...container.querySelectorAll(".tab")];
     tabDrag = {
       tab,
       container,
-      tabs,
       startX: e.clientX,
-      startIndex: tabs.indexOf(tab),
+      startY: e.clientY,
       moved: false,
-      width: tab.offsetWidth || TAB_WIDTH_FULL,
+      pointerId: e.pointerId,
     };
 
     tab.classList.add("dragging");
@@ -122,54 +173,50 @@ function bindTabDrag() {
 function onTabDragMove(e) {
   if (!tabDrag) return;
   const dx = e.clientX - tabDrag.startX;
-  if (Math.abs(dx) > DRAG_THRESHOLD) {
+  const dy = e.clientY - tabDrag.startY;
+  if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
     tabDrag.moved = true;
   }
-  tabDrag.tab.style.transform = `translateX(${dx}px)`;
-
-  if (!tabDrag.moved) return;
-
-  const tabW = tabDrag.container.classList.contains("compact") ? TAB_WIDTH_COMPACT : TAB_WIDTH_FULL;
-  const shift = Math.round(dx / (tabW + TAB_GAP));
-  let targetIndex = tabDrag.startIndex + shift;
-  targetIndex = Math.max(0, Math.min(tabDrag.tabs.length - 1, targetIndex));
-
-  const currentIndex = tabDrag.tabs.indexOf(tabDrag.tab);
-  if (targetIndex === currentIndex) return;
-
-  const targetTab = tabDrag.tabs[targetIndex];
-  if (targetIndex > currentIndex) {
-    containerInsertAfter(tabDrag.container, tabDrag.tab, targetTab);
-  } else {
-    tabDrag.container.insertBefore(tabDrag.tab, targetTab);
-  }
-
-  tabDrag.tabs = [...tabDrag.container.querySelectorAll(".tab")];
-  tabDrag.startIndex = tabDrag.tabs.indexOf(tabDrag.tab);
-  tabDrag.startX = e.clientX;
-  tabDrag.tab.style.transform = "translateX(0px)";
+  tabDrag.tab.style.transform = `translate3d(${dx}px, 0, 0)`;
 }
 
-function containerInsertAfter(container, node, ref) {
-  if (ref.nextSibling) {
-    container.insertBefore(node, ref.nextSibling);
-  } else {
-    container.appendChild(node);
+function insertIndexAtClientX(container, clientX, draggedTab) {
+  const tabs = [...container.querySelectorAll(".tab")].filter((t) => t !== draggedTab);
+  for (let i = 0; i < tabs.length; i++) {
+    const r = tabs[i].getBoundingClientRect();
+    const mid = r.left + r.width / 2;
+    if (clientX < mid) return i;
   }
+  return tabs.length;
 }
 
-function onTabDragEnd() {
+function onTabDragEnd(e) {
   if (!tabDrag) return;
 
   document.removeEventListener("mousemove", onTabDragMove);
   document.removeEventListener("mouseup", onTabDragEnd);
 
-  tabDrag.tab.style.transform = "";
-  tabDrag.tab.classList.remove("dragging");
+  const { tab, container, moved } = tabDrag;
+  tab.style.transform = "";
+  tab.classList.remove("dragging");
 
-  if (tabDrag.moved) {
+  if (moved) {
     suppressTabClick = true;
-    const order = [...tabDrag.container.querySelectorAll(".tab")].map((el) =>
+    const tabs = [...container.querySelectorAll(".tab")];
+    const fromIndex = tabs.indexOf(tab);
+    let toIndex = insertIndexAtClientX(container, e.clientX, tab);
+    if (fromIndex >= 0 && toIndex > fromIndex) toIndex -= 1;
+
+    if (fromIndex >= 0 && toIndex !== fromIndex) {
+      const ref = container.querySelectorAll(".tab")[toIndex];
+      if (toIndex > fromIndex) {
+        containerInsertAfter(container, tab, ref);
+      } else if (ref) {
+        container.insertBefore(tab, ref);
+      }
+    }
+
+    const order = [...container.querySelectorAll(".tab")].map((el) =>
       parseInt(el.getAttribute("data-id"), 10)
     );
     if (bridge && bridge.reorderTabs) {
@@ -178,6 +225,14 @@ function onTabDragEnd() {
   }
 
   tabDrag = null;
+}
+
+function containerInsertAfter(container, node, ref) {
+  if (ref.nextSibling) {
+    container.insertBefore(node, ref.nextSibling);
+  } else {
+    container.appendChild(node);
+  }
 }
 
 window.chromeUI = {
@@ -213,15 +268,18 @@ window.chromeUI = {
 };
 
 function setFavicon(tabEl, url) {
+  if (tabEl.classList.contains("is-loading")) return;
+
   const box = tabEl.querySelector(".favicon");
   if (!box) return;
 
   const next = url || FALLBACK_FAVICON;
-  if (box.dataset.src === next) return;
+  if (box.dataset.src === next && box.querySelector("img")) return;
   box.dataset.src = next;
 
   let img = box.querySelector("img");
   if (!img) {
+    box.innerHTML = "";
     img = document.createElement("img");
     img.width = 16;
     img.height = 16;
@@ -239,21 +297,50 @@ function setFavicon(tabEl, url) {
   img.src = next;
 }
 
+function setTabLoading(tabEl, loading) {
+  tabEl.classList.toggle("is-loading", !!loading);
+  const box = tabEl.querySelector(".favicon");
+  if (!box) return;
+  if (loading) {
+    box.dataset.src = "";
+    box.innerHTML = GOOGLE_SPINNER_SVG;
+    return;
+  }
+  const id = parseInt(tabEl.getAttribute("data-id"), 10);
+  const tab = (state.tabs || []).find((t) => t.id === id);
+  box.innerHTML = "";
+  setFavicon(tabEl, tab && tab.favicon);
+}
+
+function measureTabStripWidth() {
+  const strip = document.getElementById("tab-strip");
+  const tabLeft = document.querySelector(".tab-left");
+  const rightControls = document.querySelector(".right-controls");
+  const newBtn = document.getElementById("btn-new-tab");
+  if (!strip || !tabLeft) return 0;
+
+  const rightW = rightControls ? rightControls.offsetWidth + 12 : 340;
+  const stripW = strip.clientWidth || window.innerWidth;
+  const leftW = tabLeft.clientWidth;
+  const btnWidth = newBtn ? newBtn.offsetWidth + TAB_GAP : 32;
+  return Math.max(leftW, stripW - rightW) - btnWidth;
+}
+
 function setupTabLayoutObserver() {
   const tabLeft = document.querySelector(".tab-left");
   const tabStrip = document.getElementById("tab-strip");
   if (!tabLeft || layoutObserver) return;
 
-  layoutObserver = new ResizeObserver(() => updateTabLayout());
+  layoutObserver = new ResizeObserver(() => {
+    requestAnimationFrame(updateTabLayout);
+  });
   layoutObserver.observe(tabLeft);
   if (tabStrip) layoutObserver.observe(tabStrip);
 }
 
 function updateTabLayout() {
   const container = document.getElementById("tabs");
-  const tabLeft = document.querySelector(".tab-left");
-  const newBtn = document.getElementById("btn-new-tab");
-  if (!container || !tabLeft) return;
+  if (!container) return;
 
   const count = container.querySelectorAll(".tab").length;
   if (count === 0) {
@@ -261,15 +348,12 @@ function updateTabLayout() {
     return;
   }
 
-  const btnWidth = newBtn ? newBtn.offsetWidth + TAB_GAP : 32;
-  const available = Math.max(0, tabLeft.clientWidth - btnWidth);
+  const available = measureTabStripWidth();
   const fullRequired = count * TAB_WIDTH_FULL + Math.max(0, count - 1) * TAB_GAP;
+  const useCompact =
+    count >= COMPACT_MIN_TABS && available > 0 && fullRequired > available;
 
-  if (fullRequired <= available) {
-    container.classList.remove("compact");
-  } else {
-    container.classList.add("compact");
-  }
+  container.classList.toggle("compact", useCompact);
 }
 
 function renderTabs() {
@@ -277,6 +361,7 @@ function renderTabs() {
   if (!container) return;
 
   const keep = new Set();
+  const ordered = [];
 
   (state.tabs || []).forEach((tab) => {
     const id = String(tab.id);
@@ -290,7 +375,7 @@ function renderTabs() {
       el.innerHTML =
         '<span class="favicon" aria-hidden="true"></span>' +
         '<span class="title"></span>' +
-        `<span class="close no-drag" data-close="${id}">×</span>`;
+        `<span class="close no-drag" data-close="${id}" aria-label="탭 닫기">×</span>`;
     }
 
     el.classList.toggle("active", tab.id === state.activeId);
@@ -300,13 +385,17 @@ function renderTabs() {
       titleEl.textContent = label;
     }
     el.title = label;
-    setFavicon(el, tab.favicon);
+
+    if (tab.loading) {
+      setTabLoading(el, true);
+    } else {
+      setTabLoading(el, false);
+      setFavicon(el, tab.favicon);
+    }
+    ordered.push(el);
   });
 
-  state.tabs.forEach((tab) => {
-    const el = container.querySelector(`.tab[data-id="${tab.id}"]`);
-    if (el) container.appendChild(el);
-  });
+  ordered.forEach((el) => container.appendChild(el));
 
   container.querySelectorAll(".tab").forEach((el) => {
     if (!keep.has(el.getAttribute("data-id"))) {
@@ -314,7 +403,7 @@ function renderTabs() {
     }
   });
 
-  requestAnimationFrame(updateTabLayout);
+  requestAnimationFrame(() => requestAnimationFrame(updateTabLayout));
 }
 
 function renderOmnibox() {

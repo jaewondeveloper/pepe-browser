@@ -98,6 +98,7 @@ class Tab:
     title: str = DEFAULT_TAB_TITLE
     favicon: str = "https://www.google.com/favicon.ico"
     last_host: str = ""
+    loading: bool = False
 
 
 class BrowserBridge(QObject):
@@ -140,6 +141,12 @@ class BrowserBridge(QObject):
     @Slot()
     def reload(self) -> None:
         tab = self._window.active_tab()
+        if tab:
+            tab.view.reload()
+
+    @Slot(int)
+    def reloadTab(self, tab_id: int) -> None:
+        tab = next((t for t in self._window._tabs if t.tab_id == tab_id), None)
         if tab:
             tab.view.reload()
 
@@ -250,6 +257,7 @@ class PepeBrowser(QMainWindow):
         page = view.page()
         page.urlChanged.connect(lambda u, v=view: self._on_url_changed(v, u))
         page.titleChanged.connect(lambda t, v=view: self._on_title_changed(v, t))
+        page.loadStarted.connect(lambda v=view: self._on_load_started(v))
         page.loadFinished.connect(lambda _ok, v=view: self._on_tab_load_finished(v))
         page.iconUrlChanged.connect(lambda icon_url, v=view: self._on_icon_url_changed(v, icon_url))
 
@@ -264,6 +272,10 @@ class PepeBrowser(QMainWindow):
         )
         self._tabs.append(tab)
         self.stack.addWidget(view)
+        self._last_sync_payload = ""
+        self.sync_chrome(immediate=True)
+        tab.loading = True
+        self.sync_chrome(immediate=True)
         view.setUrl(url)
         self.switch_tab(tab_id)
         return tab
@@ -365,10 +377,21 @@ class PepeBrowser(QMainWindow):
             self._chrome_ready = True
             self.sync_chrome(immediate=True)
 
+    def _on_load_started(self, view: QWebEngineView) -> None:
+        tab = next((t for t in self._tabs if t.view is view), None)
+        if not tab:
+            return
+        tab.loading = True
+        self._last_sync_payload = ""
+        self.sync_chrome(immediate=True)
+
     def _on_tab_load_finished(self, view: QWebEngineView) -> None:
         tab = next((t for t in self._tabs if t.view is view), None)
-        if tab and tab.tab_id == self._active_id:
-            self.sync_chrome()
+        if not tab:
+            return
+        tab.loading = False
+        self._last_sync_payload = ""
+        self.sync_chrome(immediate=True)
 
     def _on_icon_url_changed(self, view: QWebEngineView, icon_url: QUrl) -> None:
         if not icon_url.isValid():
@@ -427,7 +450,13 @@ class PepeBrowser(QMainWindow):
         home = is_home_url(url)
         payload = {
             "tabs": [
-                {"id": t.tab_id, "title": t.title, "favicon": t.favicon} for t in self._tabs
+                {
+                    "id": t.tab_id,
+                    "title": t.title,
+                    "favicon": t.favicon,
+                    "loading": t.loading,
+                }
+                for t in self._tabs
             ],
             "activeId": self._active_id,
             "omnibox": "" if home else url.toString(),
