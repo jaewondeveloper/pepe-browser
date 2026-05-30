@@ -94,8 +94,12 @@ body {
   cursor: pointer;
   position: relative;
   user-select: none;
-  transition: background 0.12s ease, color 0.12s ease, transform 0.08s ease;
+  transition: background 0.12s ease, color 0.12s ease;
   will-change: transform;
+}
+
+.tabs.tabs-reordering .tab:not(.dragging) {
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), background 0.12s ease, color 0.12s ease;
 }
 
 /* 탭간 경계 분리선 처리 */
@@ -333,8 +337,8 @@ body {
 
 .window-controls button img {
   display: block;
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
   object-fit: contain;
   pointer-events: none;
   user-select: none;

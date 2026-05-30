@@ -154,19 +154,70 @@ function bindTabDrag() {
     if (!tab || e.button !== 0) return;
     if (e.target.closest("[data-close]")) return;
 
+    const tabs = [...container.querySelectorAll(".tab")];
+    const startIndex = tabs.indexOf(tab);
+
     tabDrag = {
       tab,
       container,
       startX: e.clientX,
-      startY: e.clientY,
+      startIndex,
+      targetIndex: startIndex,
       moved: false,
-      pointerId: e.pointerId,
     };
 
     tab.classList.add("dragging");
+    container.classList.add("tabs-reordering");
     document.addEventListener("mousemove", onTabDragMove);
     document.addEventListener("mouseup", onTabDragEnd);
     e.preventDefault();
+  });
+}
+
+function getTabSlotWidth(container) {
+  const tab = container.querySelector(".tab:not(.dragging)") || container.querySelector(".tab");
+  return tab ? tab.offsetWidth : TAB_WIDTH_FULL;
+}
+
+function computeTargetIndex(container, draggedTab, clientX) {
+  const tabs = [...container.querySelectorAll(".tab")];
+  const slot = getTabSlotWidth(container);
+  const cRect = container.getBoundingClientRect();
+
+  for (let i = 0; i < tabs.length; i++) {
+    const left = cRect.left + tabs[i].offsetLeft - container.scrollLeft;
+    const mid = left + slot / 2;
+    if (clientX < mid) return i;
+  }
+  return Math.max(0, tabs.length - 1);
+}
+
+function applyTabDragLayout(dragState, clientX) {
+  const { tab, container, startIndex, startX } = dragState;
+  const tabs = [...container.querySelectorAll(".tab")];
+  const slot = getTabSlotWidth(container);
+  const stride = slot + TAB_GAP;
+  const targetIndex = computeTargetIndex(container, tab, clientX);
+  dragState.targetIndex = targetIndex;
+
+  tabs.forEach((el, i) => {
+    if (el === tab) {
+      el.style.transform = `translate3d(${clientX - startX}px, 0, 0)`;
+      return;
+    }
+    let shift = 0;
+    if (startIndex < targetIndex && i > startIndex && i <= targetIndex) {
+      shift = -stride;
+    } else if (startIndex > targetIndex && i >= targetIndex && i < startIndex) {
+      shift = stride;
+    }
+    el.style.transform = shift ? `translate3d(${shift}px, 0, 0)` : "";
+  });
+}
+
+function clearTabDragTransforms(container) {
+  container.querySelectorAll(".tab").forEach((el) => {
+    el.style.transform = "";
   });
 }
 
@@ -177,17 +228,21 @@ function onTabDragMove(e) {
   if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
     tabDrag.moved = true;
   }
-  tabDrag.tab.style.transform = `translate3d(${dx}px, 0, 0)`;
+  applyTabDragLayout(tabDrag, e.clientX);
 }
 
-function insertIndexAtClientX(container, clientX, draggedTab) {
-  const tabs = [...container.querySelectorAll(".tab")].filter((t) => t !== draggedTab);
-  for (let i = 0; i < tabs.length; i++) {
-    const r = tabs[i].getBoundingClientRect();
-    const mid = r.left + r.width / 2;
-    if (clientX < mid) return i;
+function reorderTabDom(container, tab, fromIndex, toIndex) {
+  const tabs = [...container.querySelectorAll(".tab")];
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+  if (toIndex > fromIndex) {
+    const ref = tabs[toIndex];
+    if (ref) containerInsertAfter(container, tab, ref);
+    else container.appendChild(tab);
+  } else {
+    const ref = tabs[toIndex];
+    if (ref) container.insertBefore(tab, ref);
   }
-  return tabs.length;
 }
 
 function onTabDragEnd(e) {
@@ -196,34 +251,24 @@ function onTabDragEnd(e) {
   document.removeEventListener("mousemove", onTabDragMove);
   document.removeEventListener("mouseup", onTabDragEnd);
 
-  const { tab, container, moved } = tabDrag;
-  tab.style.transform = "";
-  tab.classList.remove("dragging");
+  const { tab, container, moved, startIndex, targetIndex } = tabDrag;
 
-  if (moved) {
+  if (moved && startIndex !== targetIndex) {
     suppressTabClick = true;
-    const tabs = [...container.querySelectorAll(".tab")];
-    const fromIndex = tabs.indexOf(tab);
-    let toIndex = insertIndexAtClientX(container, e.clientX, tab);
-    if (fromIndex >= 0 && toIndex > fromIndex) toIndex -= 1;
-
-    if (fromIndex >= 0 && toIndex !== fromIndex) {
-      const ref = container.querySelectorAll(".tab")[toIndex];
-      if (toIndex > fromIndex) {
-        containerInsertAfter(container, tab, ref);
-      } else if (ref) {
-        container.insertBefore(tab, ref);
-      }
-    }
-
+    clearTabDragTransforms(container);
+    reorderTabDom(container, tab, startIndex, targetIndex);
     const order = [...container.querySelectorAll(".tab")].map((el) =>
       parseInt(el.getAttribute("data-id"), 10)
     );
     if (bridge && bridge.reorderTabs) {
       bridge.reorderTabs(JSON.stringify(order));
     }
+  } else {
+    clearTabDragTransforms(container);
   }
 
+  tab.classList.remove("dragging");
+  container.classList.remove("tabs-reordering");
   tabDrag = null;
 }
 
